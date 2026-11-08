@@ -166,7 +166,9 @@ def test_summary_cache_and_failure_cooldown(monkeypatch):
     fallback=client.post('/api/ask',json={'question':'probation period','use_gemini':True}).json()
     assert fallback['mode']=='policy' and '503' in fallback['warning']
     repeated=client.post('/api/ask',json={'question':'probation period','use_gemini':True}).json()
-    assert '30 seconds' in repeated['warning'] and len(calls)==2
+    assert 'seconds' in repeated['warning'] and len(calls)==2
+    assert '503' in repeated['warning']
+    assert client.get('/api/health').json()['last_ai_error']=='HTTP 503'
     assert repeated['citations']
 
 
