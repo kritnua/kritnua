@@ -88,3 +88,22 @@ def test_pdf_style_annual_leave_alias_and_incomplete_badges():
     personal,citations=answer('ลากิจ',rows)
     assert 'รายเดือน' in personal and 'รายวัน' in personal
     assert 'หยุดประจาสัปดาห์' not in personal
+
+
+def test_spouse_childbirth_does_not_include_maternal_or_military_entitlements():
+    rows=rows_from_pages([('a','Policy_A.pdf',4,'รับราชการทหาร\nได้รับค่าจ้างไม่เกิน 50 วัน\nลาคลอดบุตร\nลาได้ไม่เกิน 110 วัน\nบริษัทจ่ายค่าจ้าง 55 วัน\nการดูแลบุตรและคู่สมรส\nบุตรป่วยหรือมีภาวะตามเกณฑ์\nลาต่อจากลาคลอดได้ 10 วัน\nได้รับค่าจ้าง 50%\nคู่สมรสคลอดบุตร\nลาได้ 12 วัน พร้อมค่าจ้าง\nใช้ภายใน 80 วันนับแต่คลอด\nแยกจากสิทธิลากิจ\nการทางานระหว่างตั้งครรภ์\nแจ้ง HR เพื่อจัดงาน')])
+    text,citations=answer('ภรรยาคลอดลาได้กี่วัน',rows)
+    assert '12 วัน' in text and '80 วัน' in text and 'แยกจากสิทธิลากิจ' in text
+    assert '110 วัน' not in text and '50 วัน' not in text
+    maternal,_=answer('ลาคลอดบุตร',rows)
+    assert '110 วัน' in maternal and '55 วัน' in maternal
+    assert 'ลาได้ 12 วัน' not in maternal and 'ลาต่อจากลาคลอด' not in maternal
+
+
+def test_ai_evidence_includes_small_manual_without_keyword_match():
+    from policy_qa import ai_evidence
+    rows=rows_from_pages([('a','Policy_A.pdf',4,'คู่สมรสคลอดบุตร\nลาได้ 12 วัน พร้อมค่าจ้าง'),('b','Policy_B.pdf',2,'เวลาปฏิบัติงาน\n09.00–18.00 น.')])
+    citations,complete=ai_evidence('อยากอยู่ช่วยแฟนหลังมีน้อง',rows,'a')
+    assert complete and len(citations)==1
+    assert '12 วัน' in citations[0]['text']
+    assert citations[0]['document_id']=='a'
