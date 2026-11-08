@@ -157,7 +157,7 @@ def home(): return FileResponse(ROOT / 'static/index.html')
 @app.get('/api/health')
 def health():
     provider=active_provider()
-    return {'status':'ok','mode':provider,'provider':provider,'provider_label':provider_label(provider),'provider_configured':provider!='offline','chunks':collection.count()}
+    return {'status':'ok','mode':provider,'provider':provider,'provider_label':provider_label(provider),'provider_configured':provider!='offline','model':os.getenv('GROQ_MODEL','openai/gpt-oss-20b') if provider=='groq' else MODEL,'last_ai_error':_ai_last_error,'chunks':collection.count()}
 
 @app.get('/api/documents')
 def documents():
@@ -205,10 +205,11 @@ def retrieve_local(question, document_id=None):
 
 _summary_cache = {}
 _gemini_unavailable_until = 0.0
+_ai_last_error = None
 
 @app.post('/api/ask')
 async def ask(body:Question):
-    global _gemini_unavailable_until
+    global _gemini_unavailable_until, _ai_last_error
     started = time.perf_counter()
     citations = retrieve_local(body.question, body.document_id)
     for index, citation in enumerate(citations, 1):
@@ -224,7 +225,7 @@ async def ask(body:Question):
     if provider=='offline':
         result['warning'] = 'AI chat is not configured. The local policy answer is available below.'
         return result
-    citations,complete = ai_evidence(body.question, collection.get(include=['documents','metadatas']), body.document_id)
+    citations,complete = ai_evidence(body.question, collection.get(include=['documents','metadatas']), body.document_id, max_chars=5000 if provider=='groq' else 18000)
     if not citations:
         return result
     for index,citation in enumerate(citations,1):
@@ -239,7 +240,9 @@ async def ask(body:Question):
         result.update(answer=cached['answer'], mode=provider, citations=[c for c in citations if c['reference'] in cached_refs], cached=True)
         return result
     if time.monotonic() < _gemini_unavailable_until:
-        result['warning'] = f'{label} is temporarily unavailable. The local policy answer is available below. Please try again in 30 seconds.'
+        remaining=max(1,math.ceil(_gemini_unavailable_until-time.monotonic()))
+        cause=_ai_last_error or f'{label} request failed.'
+        result['warning'] = f'{cause} Retry paused: {remaining} seconds remaining. The local policy answer remains available.'
         return result
     generation_started = time.perf_counter()
     try:
@@ -259,11 +262,13 @@ async def ask(body:Question):
         cited = re.findall(r'\[([^\]]+)\]', answer)
         if not cited or any(i not in {c['reference'] for c in citations} for i in cited):
             raise HTTPException(502, 'AI citation validation failed. The local policy answer is shown instead.')
+        _ai_last_error = None
         result.update(answer=answer, mode=provider, citations=[c for c in citations if c['reference'] in set(cited)])
         if len(_summary_cache) >= 100:
             _summary_cache.pop(next(iter(_summary_cache)))
         _summary_cache[cache_key] = {'answer': answer, 'until': time.monotonic()+600}
     except HTTPException as exc:
+        _ai_last_error = str(exc.detail)
         _gemini_unavailable_until = time.monotonic()+30
         result['warning'] = str(exc.detail) + ' — The local policy answer is shown below. AI retries are paused for 30 seconds.'
     result['generation_ms'] = round((time.perf_counter()-generation_started)*1000)
