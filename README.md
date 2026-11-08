@@ -1,18 +1,20 @@
 # HR Policy Intelligence
 
-สร้างใหม่จากภาพ Architecture ที่ผู้ใช้ให้ ไม่ใช่ซอร์สโค้ดต้นฉบับ
+FastAPI + plain JavaScript + local ChromaDB document store. Rebuilt from the provided UI reference.
 
-## สิ่งที่มี
-- UI ตามภาพ: Sidebar สีน้ำเงินเข้ม, Architecture pipeline, Overview, Assistant, Knowledge Base, Evaluation
-- FastAPI + Vanilla JS + ChromaDB
-- อัปโหลด PDF/TXT ไม่เกิน 10 MB, แบ่งข้อความพร้อม filename/page/chunk ID
-- Offline retrieval ด้วย deterministic feature hashing; แสดงข้อความที่ค้นพบโดยไม่อ้างว่าเป็นคำตอบจาก AI
-- Gemini generation + embeddings เมื่อใส่ API key ใน server environment
-- แสดงหลักฐานและตรวจว่า citation IDs อยู่ในผลค้นหา (ไม่รับรองความถูกต้องของข้ออ้าง)
-- ชุดทดสอบ retrieval ตัวอย่าง 7 กรณี
+## Answer flow
 
-## รันในเครื่อง
-ต้องใช้ Python 3.11+
+1. PDF/TXT uploads and indexing run locally, without Google or Groq.
+2. A local extractive answer appears first, preserving source conditions and separating manuals.
+3. With **Use AI to understand and answer the question** checked, the selected provider automatically interprets the original natural-language question using policy evidence.
+4. For small manuals, the AI receives all pages of the selected document(s), regardless of keyword or topic matching. This supports paraphrases without maintaining an exhaustive question list.
+5. For collections exceeding 18,000 text characters or 30 pages, generic keyword ranking and neighbouring pages select context. Coverage is marked incomplete; this is not a multilingual semantic index for large collections.
+6. Answers cite short references tied to filename and page. Citation validation checks reference IDs, not factual entailment. Missing or conflicting information must be stated rather than inferred.
+7. Successful AI answers are cached in memory for 10 minutes. Failures trigger a 30-second cooldown. Local results remain available during provider outages.
+
+## Local run
+
+Python 3.11+
 
 ```bash
 python -m venv .venv
@@ -20,44 +22,47 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app:app --reload
 ```
-เปิด http://localhost:8000/#architecture
-เลือก Overview → Load sample policies เพื่อเริ่มทดลอง
 
-## Deploy บน Render
-1. แตก ZIP แล้วอัปโหลดไฟล์ทั้งหมดไปยัง GitHub repository ใหม่ โดยให้ app.py, requirements.txt และ render.yaml อยู่ระดับบนสุด
-2. ลงชื่อเข้าใช้ https://dashboard.render.com/
-3. เลือก New → Blueprint → เชื่อม GitHub repository นี้ → ตรวจสอบชื่อ service แล้ว deploy
-4. ช่อง GEMINI_API_KEY ให้ใส่ key เฉพาะใน Render Environment หากต้องการ AI จริง ถ้าใช้ offline ให้เว้นว่างหรือลบตัวแปรนี้
-5. เปิด URL ที่ Render ให้ เช่น https://hr-policy-intelligence-xxxx.onrender.com/#architecture
+Open http://localhost:8000/#assistant. Use Overview to load synthetic sample policies.
 
-หรือเลือก New → Web Service → Python 3 แล้วตั้ง:
+## Render
+
+Use `render.yaml`, or configure a Python Web Service:
+
 - Build: `pip install -r requirements.txt`
 - Start: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 - Health check: `/api/health`
-- Python: 3.11.11
+- `DATA_DIR=/tmp/hr-policy-data` for ephemeral free-plan storage.
 
-ชื่อ subdomain ขึ้นกับความพร้อมของ Render ไม่สามารถรับประกัน ai.onrender.com หรือใช้ชื่อเว็บเดิมได้
+Free Render instances can sleep and lose uploaded data after restarts/deployments. For durable uploads, use a plan with a persistent disk and set DATA_DIR to a directory on that disk. Use one instance for embedded ChromaDB.
 
-## ข้อมูลถาวร
-ไฟล์ render.yaml ใช้ free plan และ DATA_DIR=/tmp/hr-policy-data: ข้อมูลอาจหายเมื่อ deploy/restart และบริการอาจพักเมื่อไม่มีคนใช้
-สำหรับข้อมูลถาวร เปลี่ยนไปใช้ plan ที่รองรับ persistent disk เพิ่ม disk ที่ mount path `/var/data` แล้วตั้ง DATA_DIR=/var/data/hr-policy-data
-ใช้ service instance เดียวสำหรับ local ChromaDB; การขยายหลาย instance ต้องใช้ shared vector service
+## Groq (optional alternative AI provider)
 
-## ตั้งค่า Gemini
-- GEMINI_API_KEY: secret เก็บบน server เท่านั้น
-- GEMINI_MODEL: gemini-2.5-flash (เปลี่ยนตามรุ่นที่บัญชีใช้งานได้)
-- EMBEDDING_MODEL: gemini-embedding-001
-เมื่อเปลี่ยน embedding provider/model จะใช้ collection ใหม่ ต้องอัปโหลดเอกสารใหม่
-สถานะ "configured" หมายถึงมี key ไม่ได้แปลว่าทดสอบการเชื่อมต่อ Gemini สำเร็จแล้ว
+Create a key in https://console.groq.com/keys and set these secrets/variables in Render:
 
-## ขอบเขต
-เป็น demo สำหรับเอกสารสังเคราะห์ ยังไม่มี login, การแบ่งสิทธิ์ผู้ใช้, rate limiting, OCR, policy versioning, Streamlit หรือผู้ให้บริการ OpenAI-compatible
-ห้ามอัปโหลดข้อมูลพนักงานจริงใน deployment สาธารณะนี้ ก่อนใช้งานจริงควรเพิ่ม authentication และสิทธิ์เข้าถึงเอกสาร
-โครงสร้างหน้า Architecture อ้างอิงภาพที่ให้ ส่วนหน้าอื่นสร้างใหม่ตามเมนู ไม่ได้ตรวจเทียบกับเว็บต้นฉบับ
-ค่า similarity cutoff 0.15 เป็นค่าตัวอย่าง ต้อง calibrate ด้วยชุดทดสอบจริง
-การตรวจ evaluation เป็นเพียงค้นคำในหลักฐาน ไม่ใช่การประเมินความถูกต้องของคำตอบ
-
-## ตรวจสอบ
-```bash
-pytest -q
+```text
+CHAT_PROVIDER=groq
+GROQ_API_KEY=<enter the key privately in Render>
+GROQ_MODEL=openai/gpt-oss-20b
 ```
+
+The Groq adapter uses https://api.groq.com/openai/v1/chat/completions. The model ID must be active and permitted for your account. Groq free plans have rate and token quotas; availability and answer quality are not guaranteed. Model access and plan terms can change.
+
+## Gemini (optional)
+
+```text
+CHAT_PROVIDER=gemini
+GEMINI_API_KEY=<enter the key privately in Render>
+GEMINI_MODEL=<active model permitted for your account>
+```
+
+Selected policy text is sent only to the explicitly selected AI provider when AI answering is requested. Providers are not silently switched. A missing key leaves local answers available. Disabling AI in the UI sends no policy text to external AI services. Store all keys only in environment variables, never GitHub or the browser.
+
+## Limits and verification
+
+- PDF selectable text or UTF-8 TXT, max 10 MB. Scans need OCR, which is not included.
+- No authentication, per-user document access, or LINE webhook yet. Use synthetic or approved public documents for public deployments.
+- Local topic extraction is a fallback; it does not provide universal natural-language understanding. General interpretation requires the AI provider.
+- Genuine free-provider uptime cannot be guaranteed. This app is designed to preserve local evidence when AI is unavailable.
+- Optional provider adapters are tested using mocked HTTP responses. Production keys and actual model quality must be verified in your account.
+- Run `pytest -q` for regression tests. Source policy PDFs are not committed to the repository.
