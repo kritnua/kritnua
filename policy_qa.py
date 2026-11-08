@@ -10,12 +10,17 @@ TOPICS = {
     'sick': ('ลาป่วย','sick leave'),
     'annual': ('ลาพักร้อน','ลาพักผ่อน','วันหยุดพักผ่อน','annual leave','vacation','พักผ่อนประจำปี'),
     'personal': ('ลากิจ','personal leave'),
-    'maternity': ('ลาคลอด','maternity leave','parental leave'),
-    'ordination': ('ลาอุปสมบท','ลาบวช','ordination leave'),
+    'spouse': ('คู่สมรสคลอด','ภรรยาคลอด','เมียคลอด','paternity leave','spouse childbirth'),
+    'childcare': ('บุตรป่วย','ลูกป่วย','ดูแลบุตร','ลาต่อจากลาคลอด','childcare leave'),
+    'pregnancy': ('ระหว่างตั้งครรภ์','เปลี่ยนงานขณะตั้งครรภ์'),
+    'maternity': ('ลาคลอด','คลอดบุตร','maternity leave','parental leave'),
+    'sterilization': ('ทำหมัน','sterilization leave'),
+    'training': ('ฝึกอบรม','training leave'),
+    'ordination': ('ลาอุปสมบท','ลาบวช','อุปสมบท','ฮัจญ์','ordination leave'),
     'weekly': ('หยุดประจำสัปดาห์','หยุดประจาสัปดาห์','weekly holiday'),
     'holiday': ('วันหยุดตามประเพณี','วันหยุดประเพณี','public holiday'),
     'attendance': ('การลงเวลา','เปลี่ยนกะ'),
-    'military': ('ลารับราชการทหาร','military leave'),
+    'military': ('ลารับราชการทหาร','รับราชการทหาร','military leave'),
 }
 
 def compact(text):
@@ -23,7 +28,10 @@ def compact(text):
 
 def topics_in(text):
     value=compact(text)
-    return {topic for topic, aliases in TOPICS.items() if any(compact(a) in value for a in aliases)}
+    found={topic for topic, aliases in TOPICS.items() if any(compact(a) in value for a in aliases)}
+    if 'spouse' in found or 'childcare' in found:
+        found.discard('maternity')
+    return found
 
 def terms(text):
     value=unicodedata.normalize('NFKC',text).lower()
@@ -97,11 +105,11 @@ def relevant_units(page, wanted):
             for following in lines[i+1:i+10]:
                 other=topics_in(following)
                 if re.match(r'^[A-Z][A-Za-z -]{2,35}:',following) and not other&wanted: break
-                if other and not other&wanted: break
+                if other and not other&wanted and not compact(following).startswith(('แยกจาก','ต่อจาก')): break
                 # A numbered heading for an unrelated section ends the excerpt.
                 if sum(map(len,section))+len(following)>1500: break
                 section.append(following)
-            while len(section)>1 and topics_in(section[-1]) and not has_fact(section[-1],wanted):
+            while len(section)>1 and topics_in(section[-1]) and not has_fact(section[-1],wanted) and not compact(section[-1]).startswith(('แยกจาก','ต่อจาก')):
                 section.pop()
             yield '\n'.join(section)
     else:
@@ -171,3 +179,37 @@ def extract_answer(question,citations):
     if len({c['document_id'] for c in citations})>1:
         parts.insert(1,'พบหลายคู่มือ ข้อมูลด้านล่างแยกตามไฟล์ โปรดเลือกคู่มือของหน่วยงานที่ต้องการ')
     return '\n\n'.join(parts)
+
+
+def ai_evidence(question, rows, document_id=None, max_chars=18000):
+    """For small manuals, give the model all pages: no topic whitelist required.
+
+    Larger collections use generic lexical page ranking and neighbouring pages.
+    The response reports coverage rather than claiming an exhaustive search.
+    """
+    pages=[p for p in reconstruct_pages(rows) if p['text'].strip() and (not document_id or p['document_id']==document_id)]
+    pages.sort(key=lambda p:(p['filename'],p['page']))
+    complete=sum(len(p['text']) for p in pages)<=max_chars and len(pages)<=30
+    if not complete:
+        query=set(terms(question))
+        scored=[]
+        for index,page in enumerate(pages):
+            counts=Counter(terms(page['text']))
+            score=sum(1+math.log1p(counts[t]) for t in query.intersection(counts))/math.sqrt(max(1,len(counts)))
+            scored.append((score,index))
+        scored.sort(reverse=True)
+        selected=[]
+        for score,index in scored:
+            if index not in selected:selected.append(index)
+            for neighbour in (index-1,index+1):
+                if 0<=neighbour<len(pages) and pages[neighbour]['document_id']==pages[index]['document_id'] and neighbour not in selected:
+                    selected.append(neighbour)
+        pages=[pages[i] for i in selected]
+    used=0;citations=[]
+    for page in pages:
+        if len(citations)>=30 or used>=max_chars:break
+        text=page['text'][:max_chars-used]
+        ident=hashlib.sha256(f"{page['document_id']}:{page['page']}:{text}".encode()).hexdigest()[:24]
+        citations.append({**page,'id':ident,'text':text,'retrieval':'full manual context' if complete else 'ranked page context','match_score':0})
+        used+=len(text)
+    return citations,complete
