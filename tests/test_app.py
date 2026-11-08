@@ -110,3 +110,34 @@ def test_policy_search_and_gemini_fallback_without_embedding(monkeypatch):
     assert summarized['answer'].startswith('15 days')
     assert 'warning' not in summarized
     assert client.post('/api/ask',json={'question':'zzzxqvv'}).json()['citations']==[]
+
+
+def test_upload_with_key_makes_no_provider_calls(monkeypatch):
+    import app as module
+    monkeypatch.setattr(module, 'KEY', 'configured')
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('Upload must not call Google')
+    monkeypatch.setattr(module, 'gemini_request', forbidden)
+    response=client.post('/api/documents',files={'file':('independent.txt','ลาพักร้อน 18 วัน'.encode())})
+    assert response.status_code==200
+    assert response.json()['chunks']==1
+    answer=client.post('/api/ask',json={'question':'ลาพักร้อน'}).json()
+    assert '18' in answer['answer']
+    client.delete('/api/documents/'+response.json()['id'])
+
+
+def test_migration_preserves_ids_and_does_not_restore_deleted_documents():
+    import chromadb
+    from app import migrate_legacy_collections
+    store=chromadb.PersistentClient(path=tempfile.mkdtemp(prefix='hr-migrate-'))
+    old=store.create_collection('policies-legacy')
+    old.add(ids=['original-1'],documents=['Annual leave 18 days'],metadatas=[{'document_id':'original','filename':'legacy.txt','page':2}],embeddings=[[0.1,0.2,0.3]])
+    target=store.create_collection('policy-local-v1')
+    migrate_legacy_collections(store,target)
+    assert target.count()==1
+    assert target.get()['ids']==['original-1']
+    assert target.get()['metadatas'][0]['page']==2
+    target.delete(ids=['original-1'])
+    migrate_legacy_collections(store,store.get_collection('policy-local-v1'))
+    assert target.count()==0
+    assert old.count()==1
