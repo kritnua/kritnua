@@ -75,3 +75,16 @@ def test_english_synonym_searches_thai_policy_and_generic_leave_clarifies():
     assert '08.30' in text
     text,_=answer('ลาได้กี่วัน',rows)
     assert 'ระบุประเภทการลา' in text
+
+
+def test_pdf_style_annual_leave_alias_and_incomplete_badges():
+    rows=rows_from_pages([('a','Policy_A.pdf',3,'พักผ่อน 5 / 7 / 9 วัน\nลาป่วยรับค่าจ้าง 25 วัน\nลากิจจาเป็น 4 วัน\nหยุดประจาสัปดาห์อย่างน้อย 1 วัน\nพักผ่อนประจาปี (วันทางานต่อปี)\nอายุงาน 1–ไม่ครบ 3 ปี: 5 วัน\n3–ไม่ครบ 5 ปี: 7 วัน\n5 ปีขึ้นไป: 9 วัน\nขออนุมัติล่วงหน้าอย่างน้อย 2 วัน\nลาป่วยได้ตามที่ป่วยจริง ได้รับค่าจ้าง\nไม่เกิน 25 วันทางานต่อปี\nลาตั้งแต่ 3 วันอาจต้องแสดงใบรับรองแพทย์\nลากิจจาเป็น 4 วันทางานต่อปี\nรายเดือนได้รับค่าจ้าง 4 วัน\nรายวันได้รับ 3 วัน ตามเงื่อนไข')])
+    annual,citations=answer('ลาพักร้อนกี่วัน',rows)
+    assert '5 วัน' in annual and '7 วัน' in annual and '9 วัน' in annual
+    assert 'ลาป่วย' not in annual
+    sick,citations=answer('ลาป่วย',rows)
+    assert len(citations)==1
+    assert 'ตามที่ป่วยจริง' in sick and '25 วัน' in sick and 'ใบรับรองแพทย์' in sick
+    personal,citations=answer('ลากิจ',rows)
+    assert 'รายเดือน' in personal and 'รายวัน' in personal
+    assert 'หยุดประจาสัปดาห์' not in personal
