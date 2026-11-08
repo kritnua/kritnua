@@ -14,6 +14,8 @@ def test_groq_response_and_secret_handling(monkeypatch):
         assert request.headers['Authorization']=='Bearer test-secret-key'
         import json
         assert json.loads(request.content)['max_completion_tokens']==1024
+        assert json.loads(request.content)['response_format']=={'type':'json_object'}
+        assert 'references' in json.loads(request.content)['messages'][0]['content']
         return httpx.Response(200,json={'choices':[{'message':{'content':'คำตอบ [Ref 1]'},'finish_reason':'stop'}]})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(success),**kwargs))
     assert asyncio.run(ai_chat.groq_complete('use evidence','question'))=='คำตอบ [Ref 1]'
