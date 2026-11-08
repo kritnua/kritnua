@@ -179,7 +179,8 @@ def test_natural_question_uses_full_context_and_selected_groq_provider(monkeypat
     monkeypatch.setattr(module,'_summary_cache',{})
     monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
     doc=client.post('/api/documents',files={'file':('Partner policy.txt','คู่สมรสคลอดบุตร\nลาได้ 12 วัน พร้อมค่าจ้าง\nใช้ภายใน 80 วันนับแต่คลอด'.encode())}).json()
-    async def answer_from_context(system,user):
+    async def answer_from_context(system,user,allowed_references):
+        assert 'Ref 1' in allowed_references
         assert 'อยากอยู่ช่วยแฟนหลังมีน้อง' in user
         assert 'ลาได้ 12 วัน' in user
         assert 'Sample HR Policy' not in user
@@ -213,3 +214,30 @@ def test_structured_groq_answer_and_citation_failures_do_not_mark_provider_down(
     assert '[Ref 1]' in passed['answer']
     assert client.get('/api/health').json()['last_ai_error'] is None
     assert client.head('/').status_code==200
+
+
+def test_real_groq_adapter_uses_source_enum_on_page_thirteen(monkeypatch):
+    import asyncio,json,httpx
+    import app as module
+    import ai_chat
+    monkeypatch.setenv('CHAT_PROVIDER','groq')
+    monkeypatch.setenv('GROQ_API_KEY','test-key')
+    monkeypatch.setenv('GROQ_MODEL','openai/gpt-oss-20b')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    doc=asyncio.run(module.ingest('Synthetic family policy.pdf',['']*12+['ลาคลอดบุตร\nลาได้ไม่เกิน 100 วัน\nได้รับค่าจ้างไม่เกิน 50 วัน']))
+    original=httpx.AsyncClient
+    def provider(request):
+        payload=json.loads(request.content)
+        allowed=payload['response_format']['json_schema']['schema']['properties']['claims']['items']['properties']['source']['enum']
+        assert allowed==['Ref 1']
+        assert 'PAGE: 13' in payload['messages'][1]['content']
+        output=json.dumps({'supported':True,'claims':[{'text':'ลาได้ไม่เกิน 100 วัน','source':'Ref 1'},{'text':'ได้รับค่าจ้างไม่เกิน 50 วัน','source':'Ref 1'}]},ensure_ascii=False)
+        return httpx.Response(200,json={'choices':[{'message':{'content':output},'finish_reason':'stop'}]})
+    monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(provider),**kwargs))
+    response=client.post('/api/ask',json={'question':'ลาคลอด','use_ai':True,'document_id':doc['id']}).json()
+    assert response['mode']=='groq' and 'warning' not in response
+    assert '100 วัน [Ref 1]' in response['answer']
+    assert response['citations'][0]['page']==13
+    assert client.get('/api/health').json()['last_ai_error'] is None
+    client.delete('/api/documents/'+doc['id'])

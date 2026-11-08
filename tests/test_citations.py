@@ -39,3 +39,22 @@ def test_model_admitting_insufficient_evidence_does_not_show_unsupported_claim()
     answer,refs=validate_answer(json.dumps({'answer':'ลาได้ 999 วัน','supported':False,'references':[]},ensure_ascii=False),EVIDENCE)
     assert '999' not in answer and refs==[]
     assert 'ไม่พบข้อมูลเพียงพอ' in answer
+
+
+def test_claims_use_validated_source_field_not_pdf_page_numbers():
+    data={'supported':True,'claims':[{'text':'ลาได้ 120 วัน [13]','source':'Ref 1'},{'text':'รับค่าจ้างตามเงื่อนไข','source':'Ref 2'}]}
+    answer,refs=validate_answer(json.dumps(data,ensure_ascii=False),EVIDENCE)
+    assert '[13]' not in answer
+    assert '120 วัน [Ref 1]' in answer
+    assert refs==['Ref 1','Ref 2']
+
+
+def test_claim_with_unknown_source_is_never_relabelled():
+    data={'supported':True,'claims':[{'text':'ลาได้ 120 วัน','source':'Ref 13'}]}
+    with pytest.raises(CitationError):validate_answer(json.dumps(data),EVIDENCE)
+
+
+def test_claims_without_evidence_do_not_display_model_claim():
+    data={'supported':False,'claims':[{'text':'999 days','source':'Ref 1'}]}
+    answer,refs=validate_answer(json.dumps(data),EVIDENCE)
+    assert '999' not in answer and not refs

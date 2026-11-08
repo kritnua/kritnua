@@ -4,6 +4,8 @@ import pytest
 from fastapi import HTTPException
 import ai_chat
 
+EVIDENCE='[Ref 1] FILE: policy.txt PAGE: 13\nPolicy evidence text'
+
 
 def test_groq_response_and_secret_handling(monkeypatch):
     monkeypatch.setenv('GROQ_API_KEY','test-secret-key')
@@ -14,11 +16,13 @@ def test_groq_response_and_secret_handling(monkeypatch):
         assert request.headers['Authorization']=='Bearer test-secret-key'
         import json
         assert json.loads(request.content)['max_completion_tokens']==1024
-        assert json.loads(request.content)['response_format']=={'type':'json_object'}
-        assert 'references' in json.loads(request.content)['messages'][0]['content']
+        format=json.loads(request.content)['response_format']
+        assert format['type']=='json_schema' and format['json_schema']['strict'] is True
+        assert format['json_schema']['schema']['properties']['claims']['items']['properties']['source']['enum']==['Ref 1']
+        assert 'claims' in json.loads(request.content)['messages'][0]['content']
         return httpx.Response(200,json={'choices':[{'message':{'content':'คำตอบ [Ref 1]'},'finish_reason':'stop'}]})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(success),**kwargs))
-    assert asyncio.run(ai_chat.groq_complete('use evidence','question'))=='คำตอบ [Ref 1]'
+    assert asyncio.run(ai_chat.groq_complete('use evidence',EVIDENCE))=='คำตอบ [Ref 1]'
 
 
 @pytest.mark.parametrize('status',[401,403,404,429,503])
@@ -28,7 +32,7 @@ def test_groq_error_is_actionable_without_raw_provider_data(monkeypatch,status):
     def handler(request):return httpx.Response(status,json={'error':{'message':'sensitive private payload'}})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
     with pytest.raises(HTTPException) as error:
-        asyncio.run(ai_chat.groq_complete('system','question'))
+        asyncio.run(ai_chat.groq_complete('system',EVIDENCE))
     assert str(status) in error.value.detail
     assert 'sensitive' not in error.value.detail and 'test-secret' not in error.value.detail
 
@@ -38,11 +42,11 @@ def test_groq_timeout_and_incomplete_output(monkeypatch):
     original=httpx.AsyncClient
     def timeout(request):raise httpx.ReadTimeout('secret')
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(timeout),**kwargs))
-    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system','question'))
+    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system',EVIDENCE))
     assert error.value.status_code==504
     def incomplete(request):return httpx.Response(200,json={'choices':[{'message':{'content':'partial answer'},'finish_reason':'length'}]})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(incomplete),**kwargs))
-    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system','question'))
+    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system',EVIDENCE))
     assert error.value.status_code==502
 
 
@@ -57,7 +61,7 @@ def test_groq_error_categories(monkeypatch,code,message,status,expected):
     original=httpx.AsyncClient
     def handler(request):return httpx.Response(status,json={'error':{'code':code,'message':message}},headers={'retry-after':'45'})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
-    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system','question'))
+    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system',EVIDENCE))
     assert expected in error.value.detail
     assert '45 seconds' in error.value.detail
     assert 'private secret' not in error.value.detail

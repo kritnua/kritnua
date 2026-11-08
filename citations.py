@@ -29,6 +29,24 @@ def validate_answer(raw,citations):
     if answer.startswith('{'):
         try:data=json.loads(answer)
         except ValueError:raise CitationError('AI returned malformed structured answer data.') from None
+        if isinstance(data,dict) and 'claims' in data:
+            if not isinstance(data.get('supported'),bool) or not isinstance(data['claims'],list):
+                raise CitationError('AI returned invalid claim data.')
+            if not data['supported']:
+                return 'ไม่พบข้อมูลเพียงพอในหลักฐานที่ส่งให้ AI จึงยังตอบคำถามนี้ไม่ได้ กรุณาระบุคู่มือหรือรายละเอียดเพิ่มเติม',[]
+            lines=[];used=[]
+            for claim in data['claims']:
+                if not isinstance(claim,dict) or not isinstance(claim.get('text'),str) or not claim['text'].strip():
+                    raise CitationError('AI returned an empty answer point.')
+                ref=normalize_reference(claim.get('source'))
+                if ref not in allowed:
+                    raise CitationError('AI cited a source outside the supplied policy evidence. The local answer is shown instead.')
+                # Only the validated source field creates clickable references.
+                text=re.sub(r'\[(?:ref(?:erence)?\s*)?\d+(?:\s*[,;]\s*(?:ref(?:erence)?\s*)?\d+)*\]','',claim['text'],flags=re.I).strip()
+                if not text:raise CitationError('AI returned an empty answer point.')
+                lines.append(f'{text} [{ref}]');used.append(ref)
+            if not lines:raise CitationError('AI returned no supported answer points.')
+            return '\n\n'.join(lines),list(dict.fromkeys(used))
         if not isinstance(data,dict) or not isinstance(data.get('answer'),str) or not data['answer'].strip():
             raise CitationError('AI returned an empty structured answer.')
         if not isinstance(data.get('supported'),bool) or not isinstance(data.get('references'),list):

@@ -1,17 +1,32 @@
 """Optional Groq chat adapter. Document processing remains entirely local."""
 import asyncio
 import os
+import re
 import httpx
 from fastapi import HTTPException
 
-async def groq_complete(system, user):
+async def groq_complete(system, user, allowed_references=None):
     key=os.getenv('GROQ_API_KEY','').strip()
     model=os.getenv('GROQ_MODEL','openai/gpt-oss-20b').strip()
     if not key:
         raise HTTPException(503,'Groq API key is not configured. The local policy answer remains available.')
-    schema_instruction=' Return only a JSON object with keys: answer (string), supported (boolean), references (array of source labels such as \"Ref 1\"). Use only source labels present in evidence. If evidence is insufficient set supported=false and references=[].'
+    sources=list(dict.fromkeys(allowed_references if allowed_references is not None else re.findall(r'^\[(Ref \d+)\] FILE:',user,re.M)))
+    if not sources or any(not isinstance(r,str) or not re.fullmatch(r'Ref \d+',r) for r in sources):
+        raise HTTPException(502,'No valid policy source labels were supplied to AI.')
+    schema={
+        'type':'object','additionalProperties':False,'required':['supported','claims'],
+        'properties':{
+            'supported':{'type':'boolean'},
+            'claims':{'type':'array','items':{
+                'type':'object','additionalProperties':False,'required':['text','source'],
+                'properties':{'text':{'type':'string'},'source':{'type':'string','enum':sources}}
+            }}
+        }
+    }
+    schema_instruction=' Return JSON with supported (boolean) and claims (array). Each claim has text (answer text in the user language, no inline citations) and source (one exact allowed source label). Use a separate claim for each distinct point. Never use a PDF page number as a source label. If evidence is insufficient set supported=false and claims=[].'
+    response_format={'type':'json_schema','json_schema':{'name':'policy_answer','strict':True,'schema':schema}} if model in {'openai/gpt-oss-20b','openai/gpt-oss-120b'} else {'type':'json_object'}
     payload={'model':model,'messages':[{'role':'system','content':system+schema_instruction},{'role':'user','content':user}],
-             'response_format':{'type':'json_object'},
+             'response_format':response_format,
              'temperature':0,'max_completion_tokens':1024}
     if model.startswith('openai/gpt-oss-'):
         payload['reasoning_effort']='low'

@@ -252,7 +252,7 @@ async def ask(body:Question):
             system_prompt += ' Only selected pages fit in context. Do not claim that the entire corpus was searched. If needed, ask the user to select a specific policy document.'
         user_prompt=f'QUESTION:\n{body.question}\nEVIDENCE:\n{context}'
         if provider=='groq':
-            answer=await groq_complete(system_prompt,user_prompt)
+            answer=await groq_complete(system_prompt,user_prompt,[c['reference'] for c in citations])
         else:
             data = await gemini_request(MODEL, 'generateContent', {
                 'systemInstruction': {'parts': [{'text':system_prompt}]},
