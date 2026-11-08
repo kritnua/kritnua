@@ -9,7 +9,9 @@ async def groq_complete(system, user):
     model=os.getenv('GROQ_MODEL','openai/gpt-oss-20b').strip()
     if not key:
         raise HTTPException(503,'Groq API key is not configured. The local policy answer remains available.')
-    payload={'model':model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
+    schema_instruction=' Return only a JSON object with keys: answer (string), supported (boolean), references (array of source labels such as \"Ref 1\"). Use only source labels present in evidence. If evidence is insufficient set supported=false and references=[].'
+    payload={'model':model,'messages':[{'role':'system','content':system+schema_instruction},{'role':'user','content':user}],
+             'response_format':{'type':'json_object'},
              'temperature':0,'max_completion_tokens':1024}
     if model.startswith('openai/gpt-oss-'):
         payload['reasoning_effort']='low'
