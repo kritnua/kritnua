@@ -65,3 +65,18 @@ def test_groq_error_categories(monkeypatch,code,message,status,expected):
     assert expected in error.value.detail
     assert '45 seconds' in error.value.detail
     assert 'private secret' not in error.value.detail
+
+
+def test_english_search_query_is_translated_without_sending_documents(monkeypatch):
+    import json
+    monkeypatch.setenv('GROQ_API_KEY','test-key')
+    monkeypatch.setenv('GROQ_MODEL','openai/gpt-oss-20b')
+    original=httpx.AsyncClient
+    def provider(request):
+        body=json.loads(request.content)
+        assert body['response_format']['json_schema']['name']=='thai_search_query'
+        assert body['max_completion_tokens']==384
+        assert body['messages'][1]['content']=='How much sick leave can I take?'
+        return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps({'query_th':'สิทธิลาป่วยและจำนวนวันลา'},ensure_ascii=False)},'finish_reason':'stop'}]})
+    monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(provider),**kwargs))
+    assert asyncio.run(ai_chat.groq_search_query('How much sick leave can I take?'))=='สิทธิลาป่วยและจำนวนวันลา'

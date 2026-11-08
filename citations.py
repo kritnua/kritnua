@@ -16,7 +16,7 @@ def normalize_reference(value):
     return f'Ref {int(match.group(1))}'
 
 
-def validate_answer(raw,citations):
+def validate_answer(raw,citations,language='th'):
     """Accept structured answers and common reference styles; reject unknown IDs."""
     allowed={c['reference'] for c in citations}
     references=[]
@@ -33,7 +33,7 @@ def validate_answer(raw,citations):
             if not isinstance(data.get('supported'),bool) or not isinstance(data['claims'],list):
                 raise CitationError('AI returned invalid claim data.')
             if not data['supported']:
-                return 'ไม่พบข้อมูลเพียงพอในหลักฐานที่ส่งให้ AI จึงยังตอบคำถามนี้ไม่ได้ กรุณาระบุคู่มือหรือรายละเอียดเพิ่มเติม',[]
+                return ('The supplied policy evidence does not contain enough information to answer this question. Please select the relevant manual or provide more details.' if language=='en' else 'ไม่พบข้อมูลเพียงพอในหลักฐานที่ส่งให้ AI จึงยังตอบคำถามนี้ไม่ได้ กรุณาระบุคู่มือหรือรายละเอียดเพิ่มเติม'),[]
             lines=[];used=[]
             for claim in data['claims']:
                 if not isinstance(claim,dict) or not isinstance(claim.get('text'),str) or not claim['text'].strip():
@@ -59,7 +59,7 @@ def validate_answer(raw,citations):
         raise CitationError('AI cited a source outside the supplied policy evidence. The local answer is shown instead.')
     if structured and not supported:
         # Do not display an unsupported model claim as an evidence-backed answer.
-        return 'ไม่พบข้อมูลเพียงพอในหลักฐานที่ส่งให้ AI จึงยังตอบคำถามนี้ไม่ได้ กรุณาระบุคู่มือหรือรายละเอียดเพิ่มเติม',[]
+        return ('The supplied policy evidence does not contain enough information to answer this question. Please select the relevant manual or provide more details.' if language=='en' else 'ไม่พบข้อมูลเพียงพอในหลักฐานที่ส่งให้ AI จึงยังตอบคำถามนี้ไม่ได้ กรุณาระบุคู่มือหรือรายละเอียดเพิ่มเติม'),[]
 
     def replace_group(match):
         group=match.group(1)

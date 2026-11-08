@@ -29,8 +29,9 @@ def test_sample_evaluation():
     assert client.post('/api/demo').status_code==200
     r=client.post('/api/evaluate')
     assert r.status_code==200
-    assert len(r.json()['results'])==7
-    assert all(x['passed'] for x in r.json()['results'])
+    assert r.json()['results']==[]
+    assert r.json()['documents'][0]['status']=='NOT_CONFIGURED'
+    assert r.json()['summary']['failed']==0
 
 
 def test_provider_error_is_actionable_and_redacted():
@@ -240,4 +241,51 @@ def test_real_groq_adapter_uses_source_enum_on_page_thirteen(monkeypatch):
     assert '100 วัน [Ref 1]' in response['answer']
     assert response['citations'][0]['page']==13
     assert client.get('/api/health').json()['last_ai_error'] is None
+    client.delete('/api/documents/'+doc['id'])
+
+
+def test_english_question_gets_english_answer_with_original_thai_evidence(monkeypatch):
+    import json
+    import app as module
+    monkeypatch.setenv('CHAT_PROVIDER','groq')
+    monkeypatch.setenv('GROQ_API_KEY','test-key')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    doc=client.post('/api/documents',files={'file':('Thai leave policy.txt','ลาป่วย\nลาได้ตามที่ป่วยจริง\nได้รับค่าจ้างไม่เกิน 24 วันทำงานต่อปี'.encode())}).json()
+    async def respond(system,user,allowed):
+        assert 'Write every answer point in English' in system
+        assert '24 วันทำงานต่อปี' in user
+        return json.dumps({'supported':True,'claims':[{'text':'You may take sick leave when actually ill. Paid sick leave is limited to 24 working days per year.','source':allowed[0]}]})
+    monkeypatch.setattr(module,'groq_complete',respond)
+    result=client.post('/api/ask',json={'question':'If I am ill, can I take leave and will I be paid?','use_ai':True,'document_id':doc['id']}).json()
+    assert result['answer_language']=='en' and result['mode']=='groq'
+    assert 'Paid sick leave is limited to 24 working days' in result['answer']
+    assert 'ลาป่วย' in result['citations'][0]['text']
+    client.delete('/api/documents/'+doc['id'])
+
+
+def test_long_thai_manual_uses_english_query_translation_before_context_search(monkeypatch):
+    import asyncio,json
+    import app as module
+    monkeypatch.setenv('CHAT_PROVIDER','groq')
+    monkeypatch.setenv('GROQ_API_KEY','test-key')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_search_query_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    pages=['กฎการแต่งกายและเครื่องแบบพนักงาน\n'*80 for _ in range(8)]+['ลาป่วย\nลาได้ตามที่ป่วยจริง\nได้รับค่าจ้างไม่เกิน 24 วันทำงานต่อปี']
+    doc=asyncio.run(module.ingest('Long Thai policy.pdf',pages))
+    translations=[]
+    async def translate(question):translations.append(question);return 'สิทธิลาป่วยและการได้รับค่าจ้าง'
+    async def respond(system,user,allowed):
+        assert 'PAGE: 9' in user and '24 วันทำงานต่อปี' in user
+        assert 'Write every answer point in English' in system
+        return json.dumps({'supported':True,'claims':[{'text':'Paid sick leave is limited to 24 working days per year.','source':allowed[0]}]})
+    monkeypatch.setattr(module,'groq_search_query',translate)
+    monkeypatch.setattr(module,'groq_complete',respond)
+    payload={'question':'If I become ill, will I still receive my salary?','use_ai':True,'document_id':doc['id']}
+    result=client.post('/api/ask',json=payload).json()
+    assert result['mode']=='groq' and result['translated_search']
+    assert result['answer_language']=='en' and result['citations'][0]['page']==9
+    again=client.post('/api/ask',json=payload).json()
+    assert again['cached'] and len(translations)==1
     client.delete('/api/documents/'+doc['id'])

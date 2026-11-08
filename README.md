@@ -66,3 +66,16 @@ Selected policy text is sent only to the explicitly selected AI provider when AI
 - Genuine free-provider uptime cannot be guaranteed. This app is designed to preserve local evidence when AI is unavailable.
 - Optional provider adapters are tested using mocked HTTP responses. Production keys and actual model quality must be verified in your account.
 - Run `pytest -q` for regression tests. Source policy PDFs are not committed to the repository.
+
+
+## English questions over Thai documents
+
+English questions are detected automatically. AI receives the original English question and responds in English while preserving the Thai policy's numbers, entitlement limits, paid/unpaid distinctions and conditions. Filename/page references and source passages remain in their original language.
+
+For a Thai collection too large to send in full, the selected provider first translates the search query into Thai, then retrieval uses both the English question and Thai query. The final AI answer is generated in English from the selected original evidence. Small manuals are supplied in full and do not require a separate query-translation call. Query translation and answer caches reduce repeated calls. API callers can set `answer_language` to `auto`, `en`, or `th`.
+
+If AI is unavailable, original policy excerpts are explicitly labelled as untranslated; local keyword search alone is not presented as a translation service. Source documents are never overwritten by translations.
+
+## Reviewed policy evaluation
+
+Evaluation runs eight local-answer checks per reviewed version of Manual_Dugong.pdf and Manual_Thaptaewan.pdf. Baselines include entitlement conditions, filename, source page and answer-reference linkage. Normalized content fingerprints detect changed versions. Unknown files are marked NOT_CONFIGURED; changed versions are VERSION_MISMATCH rather than FAIL. No AI calls are made by the evaluation endpoint. Passing these checks does not certify live AI translation quality, general answer accuracy or legal validity.
