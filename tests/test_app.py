@@ -48,3 +48,33 @@ def test_provider_error_is_actionable_and_redacted():
         assert expected in error.detail
         assert str(code) in error.detail
         assert 'sensitive' not in error.detail
+
+
+def test_generation_text_handles_missing_and_multiple_parts():
+    import pytest
+    from fastapi import HTTPException
+    from app import generation_text
+    for data in ({}, {'candidates': []}, {'candidates': [{'content': None}]}, {'candidates': [{'content': {'parts':[{'thought':True,'text':'internal'}]}}]}):
+        with pytest.raises(HTTPException) as exc:
+            generation_text(data)
+        assert exc.value.status_code == 502
+    assert generation_text({'candidates':[{'content':{'parts':[{'thought':True,'text':'internal'},{'text':'Answer '},{'text':'[source]'}]}}]}) == 'Answer [source]'
+
+
+def test_gemini_transport_errors(monkeypatch):
+    import asyncio
+    import httpx
+    import pytest
+    import app as module
+    from fastapi import HTTPException
+    original = httpx.AsyncClient
+    for kind, expected in [('timeout',504),('connection',502),('invalid_json',502)]:
+        def handler(request):
+            if kind == 'timeout': raise httpx.ReadTimeout('secret must not appear')
+            if kind == 'connection': raise httpx.ConnectError('secret must not appear')
+            return httpx.Response(200, text='not json')
+        monkeypatch.setattr(module.httpx, 'AsyncClient', lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs))
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(module.gemini_request('test','generateContent',{},'generation',1))
+        assert exc.value.status_code == expected
+        assert 'secret' not in exc.value.detail
