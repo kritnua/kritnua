@@ -10,7 +10,7 @@ async def groq_complete(system, user):
     if not key:
         raise HTTPException(503,'Groq API key is not configured. The local policy answer remains available.')
     payload={'model':model,'messages':[{'role':'system','content':system},{'role':'user','content':user}],
-             'temperature':0,'max_completion_tokens':2048}
+             'temperature':0,'max_completion_tokens':1024}
     if model.startswith('openai/gpt-oss-'):
         payload['reasoning_effort']='low'
     try:
@@ -21,8 +21,26 @@ async def groq_complete(system, user):
     except httpx.RequestError:
         raise HTTPException(502,'Could not connect to Groq. The local policy answer remains available.') from None
     if response.status_code!=200:
-        hints={400:'Check the selected model and request settings.',401:'Check GROQ_API_KEY in Render.',403:'Check model access and project permissions.',404:'Select an active model from Groq Console.',429:'Groq free-plan quota or rate limit reached. Check Groq Console limits.'}
-        raise HTTPException(502,f'Groq HTTP {response.status_code}. '+hints.get(response.status_code,'Groq is temporarily unavailable. Please retry later.'))
+        try:
+            error=response.json().get('error',{})
+            code=str(error.get('code','')).lower()
+            message=str(error.get('message','')).lower()
+        except (ValueError,AttributeError):
+            code,message='',''
+        # Inspect provider data for categories, but never return its raw text.
+        hints={400:'Check GROQ_MODEL and request settings.',401:'GROQ_API_KEY is invalid or expired. Replace it in this Render service.',403:'The account has no permission to use this model. Check Groq model permissions.',404:'GROQ_MODEL was not found. Select an active model in Groq Console.',429:'Groq quota or rate limit reached. Check Usage and Limits in Groq Console.'}
+        hint=hints.get(response.status_code,'Groq is temporarily unavailable. Please retry later.')
+        if code in {'model_decommissioned','model_not_found'} or 'decommissioned' in message:
+            hint='This model is unavailable or retired. Change GROQ_MODEL to an active model permitted for your account.'
+        elif 'request too large' in message or 'context length' in message or code=='context_length_exceeded':
+            hint='The policy context exceeds the model or account token limit. Select one policy document and retry.'
+        elif response.status_code==429 and ('tokens per minute' in message or 'tpm' in message or code=='tokens'):
+            hint='Groq tokens-per-minute limit reached. Wait for the quota reset and select one policy document.'
+        elif code=='invalid_api_key':
+            hint='GROQ_API_KEY is invalid. Replace it in this Render service.'
+        retry=response.headers.get('retry-after','')
+        if retry.isdigit():hint+=f' Retry after {min(int(retry),86400)} seconds.'
+        raise HTTPException(502,f'Groq HTTP {response.status_code}. '+hint)
     try:
         data=response.json()
         choice=data['choices'][0]
