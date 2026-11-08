@@ -1,7 +1,7 @@
 const pages=[['overview','◫','Overview'],['assistant','✧','AI HR Assistant'],['knowledge','▤','Knowledge Base'],['evaluation','◩','RAG Evaluation'],['architecture','♧','Architecture']];
 const main=document.querySelector('#main');
 let geminiAnswered=false;
-function showProviderStatus(mode){const el=document.querySelector('#provider');el.textContent=mode==='offline'?'Offline demo':geminiAnswered?'Gemini connected':'Gemini ready · ลองถามเพื่อทดสอบ';el.title=geminiAnswered?'Gemini ตอบสำเร็จแล้วในหน้านี้ สถานะนี้ไม่ใช่การตรวจการเชื่อมต่ออย่างต่อเนื่อง':'ตั้งค่า API key แล้ว แต่ยังไม่ได้รับคำตอบจาก Gemini ในหน้านี้';}
+function showProviderStatus(mode){const el=document.querySelector('#provider');el.textContent=mode==='offline'?'Offline mode':geminiAnswered?'Gemini connected':'Gemini configured';el.title=mode==='offline'?'Using local retrieval without Gemini.':geminiAnswered?'Gemini answered successfully in this page session. This is not a continuous connection check.':'API key configured. Ask a question to verify the connection.';}
 
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function api(path,options={}){const r=await fetch('/api/'+path,options);const raw=await r.text();let d;try{d=JSON.parse(raw)}catch{throw Error(`เซิร์ฟเวอร์ตอบข้อมูลผิดรูปแบบ (HTTP ${r.status}) กรุณาลองใหม่ หากยังพบปัญหาให้ตรวจ Render Logs`)}if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:`Request failed (HTTP ${r.status})`);return d}
