@@ -101,10 +101,11 @@ def test_policy_search_and_gemini_fallback_without_embedding(monkeypatch):
     assert '503' in fallback.json()['warning']
     assert '15' in fallback.json()['answer']
     async def success(model, operation, payload, stage, timeout):
-        assert timeout == 45
+        assert timeout == 25
         citation='Ref 1'
         return {'candidates':[{'content':{'parts':[{'text':f'15 days [{citation}]'}]}}]}
     monkeypatch.setattr(module, 'gemini_request', success)
+    monkeypatch.setattr(module, '_gemini_unavailable_until', 0.0)
     summarized=client.post('/api/ask',json={'question':'annual leave','use_gemini':True}).json()
     assert summarized['mode']=='gemini'
     assert summarized['answer'].startswith('15 days')
@@ -141,3 +142,29 @@ def test_migration_preserves_ids_and_does_not_restore_deleted_documents():
     migrate_legacy_collections(store,store.get_collection('policy-local-v1'))
     assert target.count()==0
     assert old.count()==1
+
+
+def test_summary_cache_and_failure_cooldown(monkeypatch):
+    import app as module
+    from fastapi import HTTPException
+    monkeypatch.setattr(module,'KEY','test-configured')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    calls=[]
+    async def success(*args,**kwargs):
+        calls.append(1)
+        return {'candidates':[{'content':{'parts':[{'text':'15 days [Ref 1]'}]}}]}
+    monkeypatch.setattr(module,'gemini_request',success)
+    first=client.post('/api/ask',json={'question':'annual leave','use_gemini':True}).json()
+    second=client.post('/api/ask',json={'question':'annual leave','use_gemini':True}).json()
+    assert first['mode']==second['mode']=='gemini'
+    assert second['cached'] is True and len(calls)==1
+    async def unavailable(*args,**kwargs):
+        calls.append(1)
+        raise HTTPException(502,'HTTP 503')
+    monkeypatch.setattr(module,'gemini_request',unavailable)
+    fallback=client.post('/api/ask',json={'question':'probation period','use_gemini':True}).json()
+    assert fallback['mode']=='policy' and '503' in fallback['warning']
+    repeated=client.post('/api/ask',json={'question':'probation period','use_gemini':True}).json()
+    assert '30 seconds' in repeated['warning'] and len(calls)==2
+    assert repeated['citations']
