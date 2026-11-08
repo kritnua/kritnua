@@ -12,6 +12,8 @@ def test_groq_response_and_secret_handling(monkeypatch):
     def success(request):
         assert request.url.host=='api.groq.com'
         assert request.headers['Authorization']=='Bearer test-secret-key'
+        import json
+        assert json.loads(request.content)['max_completion_tokens']==1024
         return httpx.Response(200,json={'choices':[{'message':{'content':'คำตอบ [Ref 1]'},'finish_reason':'stop'}]})
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(success),**kwargs))
     assert asyncio.run(ai_chat.groq_complete('use evidence','question'))=='คำตอบ [Ref 1]'
@@ -40,3 +42,20 @@ def test_groq_timeout_and_incomplete_output(monkeypatch):
     monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(incomplete),**kwargs))
     with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system','question'))
     assert error.value.status_code==502
+
+
+@pytest.mark.parametrize('code,message,status,expected',[
+    ('rate_limit_exceeded','Request too large for tokens per minute',429,'token limit'),
+    ('tokens','Tokens per minute limit reached',429,'tokens-per-minute'),
+    ('model_decommissioned','model retired',400,'retired'),
+    ('invalid_api_key','private secret',401,'invalid'),
+])
+def test_groq_error_categories(monkeypatch,code,message,status,expected):
+    monkeypatch.setenv('GROQ_API_KEY','test-secret-key')
+    original=httpx.AsyncClient
+    def handler(request):return httpx.Response(status,json={'error':{'code':code,'message':message}},headers={'retry-after':'45'})
+    monkeypatch.setattr(ai_chat.httpx,'AsyncClient',lambda **kwargs:original(transport=httpx.MockTransport(handler),**kwargs))
+    with pytest.raises(HTTPException) as error:asyncio.run(ai_chat.groq_complete('system','question'))
+    assert expected in error.value.detail
+    assert '45 seconds' in error.value.detail
+    assert 'private secret' not in error.value.detail
