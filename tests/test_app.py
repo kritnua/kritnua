@@ -20,7 +20,8 @@ def test_full_document_lifecycle():
     assert '15' in a['answer']
     assert a['citations'][0]['filename']=='leave.txt'
     assert a['citations'][0]['page']==1
-    assert a['citations'][0]['id'] in a['answer']
+    assert a['citations'][0]['reference'] in a['answer']
+    assert a['citations'][0]['id'] not in a['answer']
     client.delete('/api/documents/'+docid)
     assert client.get('/api/documents').json()==[]
 
@@ -100,8 +101,8 @@ def test_policy_search_and_gemini_fallback_without_embedding(monkeypatch):
     assert '503' in fallback.json()['warning']
     assert '15' in fallback.json()['answer']
     async def success(model, operation, payload, stage, timeout):
-        assert timeout == 20
-        citation=module.retrieve_local('annual leave')[0]['id']
+        assert timeout == 45
+        citation='Ref 1'
         return {'candidates':[{'content':{'parts':[{'text':f'15 days [{citation}]'}]}}]}
     monkeypatch.setattr(module, 'gemini_request', success)
     summarized=client.post('/api/ask',json={'question':'annual leave','use_gemini':True}).json()
