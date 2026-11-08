@@ -168,3 +168,24 @@ def test_summary_cache_and_failure_cooldown(monkeypatch):
     repeated=client.post('/api/ask',json={'question':'probation period','use_gemini':True}).json()
     assert '30 seconds' in repeated['warning'] and len(calls)==2
     assert repeated['citations']
+
+
+def test_natural_question_uses_full_context_and_selected_groq_provider(monkeypatch):
+    import app as module
+    monkeypatch.setenv('CHAT_PROVIDER','groq')
+    monkeypatch.setenv('GROQ_API_KEY','test-secret')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    doc=client.post('/api/documents',files={'file':('Partner policy.txt','คู่สมรสคลอดบุตร\nลาได้ 12 วัน พร้อมค่าจ้าง\nใช้ภายใน 80 วันนับแต่คลอด'.encode())}).json()
+    async def answer_from_context(system,user):
+        assert 'อยากอยู่ช่วยแฟนหลังมีน้อง' in user
+        assert 'ลาได้ 12 วัน' in user
+        assert 'Sample HR Policy' not in user
+        return 'ลาได้ 12 วัน พร้อมค่าจ้าง ใช้ภายใน 80 วันนับแต่คลอด [Ref 1]'
+    monkeypatch.setattr(module,'groq_complete',answer_from_context)
+    result=client.post('/api/ask',json={'question':'อยากอยู่ช่วยแฟนหลังมีน้อง','use_ai':True,'document_id':doc['id']}).json()
+    assert result['mode']=='groq' and result['provider_label']=='Groq'
+    assert result['context_complete'] and '12 วัน' in result['answer']
+    assert all(c['filename']=='Partner policy.txt' for c in result['citations'])
+    assert client.get('/api/health').json()['provider_label']=='Groq'
+    client.delete('/api/documents/'+doc['id'])
