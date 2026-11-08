@@ -191,3 +191,25 @@ def test_natural_question_uses_full_context_and_selected_groq_provider(monkeypat
     assert all(c['filename']=='Partner policy.txt' for c in result['citations'])
     assert client.get('/api/health').json()['provider_label']=='Groq'
     client.delete('/api/documents/'+doc['id'])
+
+
+def test_structured_groq_answer_and_citation_failures_do_not_mark_provider_down(monkeypatch):
+    import json
+    import app as module
+    monkeypatch.setenv('CHAT_PROVIDER','groq')
+    monkeypatch.setenv('GROQ_API_KEY','test-key')
+    monkeypatch.setattr(module,'_summary_cache',{})
+    monkeypatch.setattr(module,'_gemini_unavailable_until',0.0)
+    async def invalid(*args):return 'Answer without source references'
+    monkeypatch.setattr(module,'groq_complete',invalid)
+    failed=client.post('/api/ask',json={'question':'annual leave','use_ai':True}).json()
+    assert failed['mode']=='policy'
+    assert 'retry AI now' in failed['warning']
+    assert module._gemini_unavailable_until==0.0
+    async def valid(*args):return json.dumps({'answer':'15 days','supported':True,'references':['Ref 1']})
+    monkeypatch.setattr(module,'groq_complete',valid)
+    passed=client.post('/api/ask',json={'question':'annual leave','use_ai':True}).json()
+    assert passed['mode']=='groq'
+    assert '[Ref 1]' in passed['answer']
+    assert client.get('/api/health').json()['last_ai_error'] is None
+    assert client.head('/').status_code==200
