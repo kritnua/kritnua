@@ -17,8 +17,7 @@ MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
 EMBED = os.getenv('EMBEDDING_MODEL', 'gemini-embedding-001')
 MODE = 'gemini' if KEY else 'offline'
 client = chromadb.PersistentClient(path=str(DATA / 'chroma'))
-fingerprint = hashlib.sha256(f'{MODE}:{EMBED if KEY else "hash-v1"}'.encode()).hexdigest()[:12]
-collection = client.get_or_create_collection('policies-' + fingerprint, metadata={'hnsw:space':'cosine'})
+collection = client.get_or_create_collection('policy-local-v1', metadata={'hnsw:space':'cosine'})
 app = FastAPI(title='HR Policy Intelligence')
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
 
@@ -86,15 +85,7 @@ def provider_error(response, stage, model):
         detail = 'เรียกผู้ให้บริการไม่สำเร็จ กรุณาตรวจการตั้งค่า Google project'
     return HTTPException(502, prefix + detail)
 
-async def embed(texts, query=False):
-    if KEY:
-        data = await gemini_request(EMBED, 'batchEmbedContents', {'requests':[{'model':f'models/{EMBED}', 'content':{'parts':[{'text':t}]}, 'taskType':'RETRIEVAL_QUERY' if query else 'RETRIEVAL_DOCUMENT'} for t in texts]}, 'embedding', 45)
-        try:
-            vectors = [e['values'] for e in data['embeddings']]
-            if len(vectors) != len(texts) or any(not v for v in vectors): raise ValueError()
-            return vectors
-        except (KeyError, TypeError, ValueError):
-            raise HTTPException(502, 'Gemini ส่ง embedding ไม่ครบหรือรูปแบบไม่ถูกต้อง') from None
+def local_embeddings(texts):
     result=[]
     for text in texts:
         v=[0.0]*512
@@ -106,6 +97,28 @@ async def embed(texts, query=False):
         norm=math.sqrt(sum(x*x for x in v)) or 1
         result.append([x/norm for x in v])
     return result
+
+
+async def embed(texts, query=False):
+    # Compatibility wrapper: document indexing is local regardless of API key.
+    return local_embeddings(texts)
+
+def migrate_legacy_collections(store, destination):
+    for legacy in store.list_collections():
+        name = legacy.name
+        if not name.startswith('policies-'): continue
+        marker = 'migrated_' + hashlib.sha256(name.encode()).hexdigest()[:16]
+        if (destination.metadata or {}).get(marker): continue
+        source = store.get_collection(name)
+        for offset in range(0, source.count(), 100):
+            batch = source.get(limit=100, offset=offset, include=['documents','metadatas'])
+            if batch['ids']:
+                destination.upsert(ids=batch['ids'], documents=batch['documents'],
+                    metadatas=batch['metadatas'], embeddings=local_embeddings(batch['documents']))
+        destination.modify(metadata={**(destination.metadata or {}), marker: True})
+
+# Preserve existing stored passages when switching off remote indexing.
+migrate_legacy_collections(client, collection)
 
 async def ingest(name, pages):
     docid=uuid.uuid4().hex
@@ -121,7 +134,7 @@ async def ingest(name, pages):
     if len(chunks)>2000: raise HTTPException(413,'Document exceeds 2,000 passages. Split into smaller files.')
     vectors=[]
     for start in range(0,len(chunks),50):
-        vectors.extend(await embed(chunks[start:start+50]))
+        vectors.extend(local_embeddings(chunks[start:start+50]))
     for start in range(0,len(chunks),100):
         end=start+100
         collection.add(ids=ids[start:end],documents=chunks[start:end],metadatas=metadata[start:end],embeddings=vectors[start:end])
