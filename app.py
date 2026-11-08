@@ -2,6 +2,7 @@ import hashlib, math, os, re, uuid, logging, traceback, time, asyncio
 from collections import Counter
 from policy_qa import page_chunks, retrieve, extract_answer, ai_evidence
 from ai_chat import groq_complete
+from citations import validate_answer, CitationError
 from pathlib import Path
 from io import BytesIO
 import httpx
@@ -151,7 +152,7 @@ async def ingest(name, pages):
         collection.add(ids=ids[start:end],documents=chunks[start:end],metadatas=metadata[start:end],embeddings=vectors[start:end])
     return {'id':docid,'name':name,'chunks':len(chunks)}
 
-@app.get('/')
+@app.api_route('/',methods=['GET','HEAD'])
 def home(): return FileResponse(ROOT / 'static/index.html')
 
 @app.get('/api/health')
@@ -259,9 +260,7 @@ async def ask(body:Question):
                 'generationConfig': {'maxOutputTokens': 2048}
             }, 'generation', 25)
             answer = generation_text(data)
-        cited = re.findall(r'\[([^\]]+)\]', answer)
-        if not cited or any(i not in {c['reference'] for c in citations} for i in cited):
-            raise HTTPException(502, 'AI citation validation failed. The local policy answer is shown instead.')
+        answer,cited = validate_answer(answer,citations)
         _ai_last_error = None
         result.update(answer=answer, mode=provider, citations=[c for c in citations if c['reference'] in set(cited)])
         if len(_summary_cache) >= 100:
@@ -269,8 +268,11 @@ async def ask(body:Question):
         _summary_cache[cache_key] = {'answer': answer, 'until': time.monotonic()+600}
     except HTTPException as exc:
         _ai_last_error = str(exc.detail)
-        _gemini_unavailable_until = time.monotonic()+30
-        result['warning'] = str(exc.detail) + ' — The local policy answer is shown below. AI retries are paused for 30 seconds.'
+        if isinstance(exc,CitationError):
+            result['warning'] = str(exc.detail) + ' — The local policy answer remains available. You can retry AI now.'
+        else:
+            _gemini_unavailable_until = time.monotonic()+30
+            result['warning'] = str(exc.detail) + ' — The local policy answer is shown below. AI retries are paused for 30 seconds.'
     result['generation_ms'] = round((time.perf_counter()-generation_started)*1000)
     return result
 
