@@ -24,23 +24,35 @@ if(page[0]==='assistant'){main.innerHTML=heading('GROUNDED IN YOUR POLICIES','AI
 if(page[0]==='evaluation'){main.innerHTML=heading('MEASURE BEFORE YOU TRUST','RAG Evaluation','Inspect retrieval performance on a small, synthetic test set.')+card('Seven-case retrieval check','<p>Load the sample policies from Overview first. These checks look for expected phrases in retrieved passages. They do not establish factual accuracy, claim support, or production readiness.</p><button class="primary" id="evaluate">Run evaluation</button>')+'<div id="results" aria-live="polite"></div>';document.querySelector('#evaluate').onclick=async e=>{e.target.disabled=true;try{const d=await post('evaluate',{});document.querySelector('#results').innerHTML=card('Results',d.results.map(r=>`<div class="document"><span>${esc(r.question)}</span><b class="${r.passed?'pass':'fail'}">${r.passed?'PASS':'FAIL'}</b></div>`).join('')+`<p>${esc(d.note)}</p>`)}catch(e){toast(e.message)}finally{e.target.disabled=false}}}
 }
 
+function referenceAnswer(answer,citations){
+ const valid=new Set(citations.map(c=>c.reference));
+ return esc(answer).replace(/\[(Ref \d+)\]/g,(full,ref)=>valid.has(ref)?'<button type="button" data-reference="'+ref+'" style="padding:2px 6px;font-size:12px">'+full+'</button>':full);
+}
 async function answerQuestion(question,useGemini){
  const target=document.querySelector('#response');if(!target)return;
  const search=document.querySelector('#ask button');const ai=document.querySelector('#summarize');
- search.disabled=true;if(ai)ai.disabled=true;
+ let timer=null;const began=Date.now();const aiLabel=ai?.textContent;
+ search.disabled=true;if(ai){ai.disabled=true;ai.textContent='Summarizing…'}
  if(!useGemini)target.textContent='Searching uploaded policies…';
- else target.insertAdjacentHTML('afterbegin','<p id="ai-pending" class="muted">Gemini is summarizing. Your policy passages remain available below.</p>');
+ else{
+  target.insertAdjacentHTML('afterbegin','<div id="ai-pending" role="status" style="padding:16px;margin-bottom:12px;border:1px solid #d5daff;border-radius:8px;background:#eef1ff"><strong>Summarizing with Gemini…</strong><p id="ai-elapsed">Waiting for Gemini · 0 seconds</p><span>Your policy passages remain available below. This may take up to 45 seconds.</span></div>');
+  timer=setInterval(()=>{const el=document.querySelector('#ai-elapsed');if(el)el.textContent='Waiting for Gemini · '+Math.floor((Date.now()-began)/1000)+' seconds'},1000);
+ }
  try{
   const d=await post('ask',{question,use_gemini:useGemini});
   if(!target.isConnected)return;
   if(d.mode==='gemini'&&d.citations?.length){geminiAnswered=true;showProviderStatus('gemini')}
   const label=d.mode==='gemini'?'Gemini summary':'Policy passages · Direct from files';
   const timing='Local search: '+d.retrieval_ms+' ms'+(d.generation_ms?' · Gemini: '+(d.generation_ms/1000).toFixed(1)+' s':'');
-  target.innerHTML=card(label, '<p>'+esc(timing)+'</p>'+(d.warning?'<p role="status">'+esc(d.warning)+'</p>':'')+'<div class="answer">'+esc(d.answer)+'</div>'+(d.citations.length?'<div class="actions"><button id="summarize">Summarize with Gemini</button><span class="muted">Optional AI summary based on these passages.</span></div>':''))
-   +card('Source evidence',d.citations.length?d.citations.map(c=>'<details class="evidence"><summary>'+esc(c.filename)+' · Page '+c.page+' · Keyword score '+c.match_score+'</summary>'+esc(c.text)+'<p>Chunk: '+esc(c.id)+'</p></details>').join(''):'<p>No matching passages. Try words used in your policy. Local keyword search may miss paraphrases or translations.</p>');
+  const warning=d.warning?'<div role="alert" style="padding:14px;margin:12px 0;border:1px solid #e8c17b;border-radius:8px;background:#fff8e8;color:#79501b"><strong>Gemini summary unavailable</strong><p>'+esc(d.warning)+'</p>Your policy passages are shown below. You can retry later.</div>':'';
+  target.innerHTML=card(label, '<p>'+esc(timing)+'</p>'+warning+'<div class="answer">'+referenceAnswer(d.answer,d.citations)+'</div>'+(d.citations.length?'<div class="actions"><button id="summarize">'+(d.warning?'Retry Gemini summary':'Summarize with Gemini')+'</button><span class="muted">Optional AI summary based on these passages.</span></div>':''))
+   +card('Source evidence',d.citations.length?d.citations.map((c,i)=>'<details id="source-'+i+'" class="evidence"><summary>['+esc(c.reference)+'] '+esc(c.filename)+' · Page '+c.page+'</summary>'+esc(c.text)+'</details>').join(''):'<p>No matching passages. Try words used in your policy. Local keyword search may miss paraphrases or translations.</p>');
+  target.querySelectorAll('[data-reference]').forEach(b=>b.onclick=()=>{const index=d.citations.findIndex(c=>c.reference===b.dataset.reference);const el=document.querySelector('#source-'+index);if(el){el.open=true;el.scrollIntoView({behavior:'smooth',block:'center'})}});
   const summarize=document.querySelector('#summarize');if(summarize)summarize.onclick=()=>answerQuestion(question,true);
- }catch(e){if(useGemini){toast(e.message)}else target.textContent=e.message}
- finally{search.disabled=false;if(ai)ai.disabled=false;document.querySelector('#ai-pending')?.remove()}
+ }catch(e){
+  if(useGemini){const alert=document.createElement('div');alert.setAttribute('role','alert');alert.className='card';alert.textContent='Gemini summary failed: '+e.message+'. Your policy passages remain below.';target.prepend(alert)}
+  else target.textContent=e.message;
+ }finally{if(timer)clearInterval(timer);search.disabled=false;if(ai){ai.disabled=false;ai.textContent=aiLabel}target.querySelector('#ai-pending')?.remove()}
 }
 
 async function loadDocs(){try{const docs=await api('documents');const el=document.querySelector('#documents');if(!el)return;el.innerHTML=docs.length?docs.map(d=>`<div class="document"><div><strong>${esc(d.name)}</strong><small>${d.chunks} indexed passages</small></div><button data-delete="${esc(d.id)}">Delete</button></div>`).join(''):'<p>No documents yet. Upload a PDF or TXT, or load sample policies from Overview.</p>';el.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this document and all its indexed passages?'))return;try{await api('documents/'+b.dataset.delete,{method:'DELETE'});await loadDocs()}catch(e){toast(e.message)}})}catch(e){toast(e.message)}}
