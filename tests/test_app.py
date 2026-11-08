@@ -30,3 +30,21 @@ def test_sample_evaluation():
     assert r.status_code==200
     assert len(r.json()['results'])==7
     assert all(x['passed'] for x in r.json()['results'])
+
+
+def test_provider_error_is_actionable_and_redacted():
+    import httpx
+    from app import provider_error
+    for code, message, expected in [
+        (429, 'quota contains sensitive value', 'โควตา'),
+        (404, 'sensitive resource name', 'ไม่พบโมเดล'),
+        (400, 'API key not valid sensitive', 'API key'),
+        (403, 'private project sensitive', 'ไม่มีสิทธิ์'),
+        (503, 'internal sensitive', 'ขัดข้อง'),
+    ]:
+        response = httpx.Response(code, json={'error': {'message': message}})
+        error = provider_error(response, 'generation', 'test-model')
+        assert error.status_code == 502
+        assert expected in error.detail
+        assert str(code) in error.detail
+        assert 'sensitive' not in error.detail
