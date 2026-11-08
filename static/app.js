@@ -1,7 +1,7 @@
 const pages=[['overview','◫','Overview'],['assistant','✧','AI HR Assistant'],['knowledge','▤','Knowledge Base'],['evaluation','◩','RAG Evaluation'],['architecture','♧','Architecture']];
 const main=document.querySelector('#main');
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(path,options={}){const r=await fetch('/api/'+path,options);const d=await r.json();if(!r.ok)throw Error(d.detail||'Request failed');return d}
+async function api(path,options={}){const r=await fetch('/api/'+path,options);const raw=await r.text();let d;try{d=JSON.parse(raw)}catch{throw Error(`เซิร์ฟเวอร์ตอบข้อมูลผิดรูปแบบ (HTTP ${r.status}) กรุณาลองใหม่ หากยังพบปัญหาให้ตรวจ Render Logs`)}if(!r.ok)throw Error(typeof d.detail==='string'?d.detail:`Request failed (HTTP ${r.status})`);return d}
 function toast(s){const t=document.querySelector('#toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',6000)}
 const post=(path,data)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
 const heading=(tag,title,sub)=>`<div class="eyebrow">${tag}</div><h1>${title}</h1><p class="subtitle">${sub}</p>`;
