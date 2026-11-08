@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: hr-policy-intelligence
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: DATA_DIR
+        value: /tmp/hr-policy-data
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: EMBEDDING_MODEL
+        value: gemini-embedding-001
