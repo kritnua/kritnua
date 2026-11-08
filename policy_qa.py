@@ -8,15 +8,18 @@ from collections import Counter, defaultdict
 TOPICS = {
     'hours': ('เวลาปฏิบัติงาน','เวลาทำงาน','เวลางาน','เข้างาน','เลิกงาน','working hours','work hours','office hours','working time'),
     'sick': ('ลาป่วย','sick leave'),
-    'annual': ('ลาพักร้อน','ลาพักผ่อน','วันหยุดพักผ่อน','annual leave','vacation'),
+    'annual': ('ลาพักร้อน','ลาพักผ่อน','วันหยุดพักผ่อน','annual leave','vacation','พักผ่อนประจำปี'),
     'personal': ('ลากิจ','personal leave'),
     'maternity': ('ลาคลอด','maternity leave','parental leave'),
     'ordination': ('ลาอุปสมบท','ลาบวช','ordination leave'),
+    'weekly': ('หยุดประจำสัปดาห์','หยุดประจาสัปดาห์','weekly holiday'),
+    'holiday': ('วันหยุดตามประเพณี','วันหยุดประเพณี','public holiday'),
+    'attendance': ('การลงเวลา','เปลี่ยนกะ'),
     'military': ('ลารับราชการทหาร','military leave'),
 }
 
 def compact(text):
-    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text).lower()).translate(str.maketrans('๐๑๒๓๔๕๖๗๘๙','0123456789'))
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text).lower()).replace('\u0e4d','').translate(str.maketrans('๐๑๒๓๔๕๖๗๘๙','0123456789'))
 
 def topics_in(text):
     value=compact(text)
@@ -98,6 +101,8 @@ def relevant_units(page, wanted):
                 # A numbered heading for an unrelated section ends the excerpt.
                 if sum(map(len,section))+len(following)>1500: break
                 section.append(following)
+            while len(section)>1 and topics_in(section[-1]) and not has_fact(section[-1],wanted):
+                section.pop()
             yield '\n'.join(section)
     else:
         for piece,offset in page_chunks(text): yield piece
@@ -135,6 +140,9 @@ def retrieve(question,rows,document_id=None):
             ident=hashlib.sha256(f"{page['document_id']}:{page['page']}:{text}".encode()).hexdigest()[:24]
             candidates.append({'id':ident,**{k:v for k,v in page.items() if k!='text'},'text':text,
                                'match_score':round(score,3),'retrieval':'contextual local search'})
+    # Prefer full policy clauses over short infographic badges on the same page.
+    detailed = {(c['document_id'],c['page']) for c in candidates if len(c['text'])>=80 and '\n' in c['text']}
+    candidates = [c for c in candidates if len(c['text'])>=70 or (c['document_id'],c['page']) not in detailed]
     candidates.sort(key=lambda c:(-c['match_score'],c['filename'],c['page']))
     # Include each policy separately instead of silently choosing one employer.
     grouped=defaultdict(list)
